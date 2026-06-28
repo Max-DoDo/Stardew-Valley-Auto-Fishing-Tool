@@ -1,0 +1,32 @@
+{
+    "green_bar": {
+        "hsv_high": [
+            95,
+            255,
+            229
+        ],
+        "hsv_low": [
+            35,
+            50,
+            50
+        ],
+        "h_tolerance": 10,
+        "s_low": 150,
+        "s_high": 255,
+        "v_low": 80,
+        "v_high": 255
+    },
+    "control": {
+        "mode": "mouse",
+        "mouse_button": "left",
+        "key": "c"
+    },
+    "window_title": "Stardew Valley",
+    "roi": {
+        "left": 739,
+        "top": 217,
+        "width": 161,
+        "height": 555
+    },
+    "target_fps": 20
+}
