@@ -23,10 +23,10 @@
     },
     "window_title": "Stardew Valley",
     "roi": {
-        "left": 739,
-        "top": 217,
-        "width": 161,
-        "height": 555
+        "left": 593,
+        "top": 636,
+        "width": 346,
+        "height": 327
     },
     "target_fps": 20
 }

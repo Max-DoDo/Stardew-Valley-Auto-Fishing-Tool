@@ -71,6 +71,7 @@ class BboxDetector:
             "width": self.roi_width,
             "height": self.roi_height,
         }
+        Log.info(f"当前monitor大小 {self.monitor}")
 
     def _load_fish_templates(self) -> None:
         
@@ -122,7 +123,6 @@ class BboxDetector:
     def capture_roi(self):
         screenshot = self.sct.grab(self.monitor)
         img = np.array(screenshot)
-
         frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
         return frame
     
@@ -170,7 +170,7 @@ class BboxDetector:
             x, y, bw, bh = cv2.boundingRect(contour)
             area = cv2.contourArea(contour)
 
-            # 钓鱼条通常是竖向矩形
+            # 寻找竖向矩形
             aspect_ratio = bh / max(bw, 1)
 
             if aspect_ratio < 1.2:
@@ -181,7 +181,7 @@ class BboxDetector:
         if not candidates:
             return BboxResult(found_bbox=False)
 
-        # 6. 选择最像钓鱼条的轮廓
+        # 选择最像钓鱼条的轮廓
         candidates.sort(key=lambda item: item[0], reverse=True)
 
         best_score, bbox = candidates[0]
@@ -220,6 +220,9 @@ class BboxDetector:
 
         cv2.namedWindow(preview_win, cv2.WINDOW_NORMAL)
         cv2.namedWindow(mask_win, cv2.WINDOW_NORMAL)
+
+        cv2.resizeWindow(preview_win, self.roi_width, self.roi_height)
+        cv2.resizeWindow(mask_win, self.roi_width, self.roi_height)
         # 置顶窗口
         try:
             cv2.setWindowProperty(preview_win, cv2.WND_PROP_TOPMOST, 1)
@@ -313,6 +316,7 @@ class BboxDetector:
                 cv2.LINE_AA,
             )
 
+            Log.debug(debug_frame.shape)
             cv2.imshow(preview_win, debug_frame)
             cv2.imshow(mask_win, mask)
 
