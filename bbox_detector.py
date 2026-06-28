@@ -60,7 +60,6 @@ class BboxDetector:
         self.greenbar_hsv_high = np.array(greenbar["hsv_high"], dtype=np.uint8)
         self.greenbar_hsv_low = np.array(greenbar["hsv_low"], dtype=np.uint8)
 
-
         self.fish_template_dir = Path(fish_template_dir)
         self.fish_templates: list[tuple[str, np.ndarray]] = []
         self._load_fish_templates()
@@ -71,6 +70,15 @@ class BboxDetector:
             "width": self.roi_width,
             "height": self.roi_height,
         }
+        self.bar_size_locked = False
+        self.bar_size_samples: list[BBox] = []
+        self.bar_size_sample_limit = 20
+
+        self.last_bar_center: Point | None = None
+
+        self.missing_bar_frames = 0
+        self.max_missing_bar_frames = 40
+
         Log.info(f"当前monitor大小 {self.monitor}")
 
     def _load_fish_templates(self) -> None:
@@ -111,7 +119,7 @@ class BboxDetector:
 
         for window in all_windows:
             title = window.title or ""
-            Log.debug(f"正在寻找游戏窗口{title}")
+            Log.info(f"正在寻找游戏窗口{title}")
 
             if self.window_title.lower() == title.lower():
                 Log.success(f"匹配游戏窗口 标题:{title}")
@@ -179,8 +187,14 @@ class BboxDetector:
             candidates.append((score, (x, y, bw, bh)))
 
         if not candidates:
+            self.missing_bar_frames += 1
+            if self.missing_bar_frames >= self.max_missing_bar_frames:
+                if self.bar_size_locked:
+                    self.reset_bar_tracking()
+                    self.missing_bar_frames = 0
             return BboxResult(found_bbox=False)
-
+        
+        self.missing_bar_frames = 0
         # 选择最像钓鱼条的轮廓
         candidates.sort(key=lambda item: item[0], reverse=True)
 
@@ -192,16 +206,100 @@ class BboxDetector:
             y + bh // 2,
         )
 
+        # 当前帧原始检测结果
+        raw_bbox = bbox
+        # raw_center = center
+
+        # 用当前 bbox 更新大小锁定器
+        self._update_bbox_size_lock(raw_bbox)
+
+        # # 平滑 center，减少鱼图标造成的中心抖动
+        # if self.last_bar_center is not None:
+        #     old_x, old_y = self.last_bar_center
+        #     new_x, new_y = raw_center
+
+        #     alpha = 0.35
+
+        #     smooth_center = (
+        #         int(old_x * (1 - alpha) + new_x * alpha),
+        #         int(old_y * (1 - alpha) + new_y * alpha),
+        #     )
+        # else:
+        #     smooth_center = raw_center
+
+        # self.last_bar_center = smooth_center
+
+        # 如果大小已经锁定，就不要再用当前帧 bbox 的宽高
+        if self.bar_size_locked:
+            final_bbox = self._make_locked_bar_bbox(center)
+        else:
+            final_bbox = raw_bbox
+
         confidence = min(1.0, best_score / 5000)
 
         return BboxResult(
             found_bbox=True,
             bbox_center=center,
-            bbox_location=bbox,
+            bbox_location=final_bbox,
             bbox_confidence=confidence
         )
 
+    def _update_bbox_size_lock(self, bbox: BBox):
+        if self.bar_size_locked:
+            return
+        
+        self.bar_size_samples.append(bbox)
 
+        if len(self.bar_size_samples) < self.bar_size_sample_limit:
+            return
+        
+        widths = np.array([box[2] for box in self.bar_size_samples], dtype=np.float32)
+        heights = np.array([box[3] for box in self.bar_size_samples], dtype=np.float32)
+
+        locked_w = int(np.median(widths))
+        locked_h = int(np.max(heights))
+        
+        self.locked_bar_width = max(1, locked_w)
+        self.locked_bar_height = max(1, locked_h)
+        self.bar_size_locked = True
+
+        Log.success(
+        f"已锁定钓鱼条大小: "
+        f"width={self.locked_bar_width}, "
+        f"height={self.locked_bar_height}"
+        )
+
+    def _make_locked_bar_bbox(self, center: Point) -> BBox:
+        """
+        使用锁定后的钓鱼条大小，根据当前中心点重建 bbox。
+        """
+        if self.locked_bar_width is None or self.locked_bar_height is None:
+            raise RuntimeError("钓鱼条大小尚未锁定")
+
+        cx, cy = center
+
+        x = int(cx - self.locked_bar_width / 2)
+        y = int(cy - self.locked_bar_height / 2)
+
+        return (
+            x,
+            y,
+            self.locked_bar_width,
+            self.locked_bar_height,
+        )
+    
+    def reset_bar_tracking(self) -> None:
+        """
+        重置钓鱼条跟踪状态。
+        新一轮钓鱼开始时调用。
+        """
+        self.bar_size_locked = False
+        self.locked_bar_width = None
+        self.locked_bar_height = None
+        self.bar_size_samples.clear()
+        self.last_bar_center = None
+
+        Log.info("已重置钓鱼条跟踪状态")
     
     def preview(self) -> None:
         """
@@ -316,7 +414,6 @@ class BboxDetector:
                 cv2.LINE_AA,
             )
 
-            Log.debug(debug_frame.shape)
             cv2.imshow(preview_win, debug_frame)
             cv2.imshow(mask_win, mask)
 
@@ -347,7 +444,6 @@ if __name__ == "__main__":
     fv.preview()
 
     # fv.detect_fishing_bar(fv.capture_roi())
-    Log.debug(fv.detect_fishing_bar(fv.capture_roi()))
 
         
         
