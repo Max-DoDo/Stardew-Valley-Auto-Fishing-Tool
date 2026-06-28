@@ -9,8 +9,8 @@ import mss
 import numpy as np
 import pygetwindow as gw
 
-from config_manager import ConfigManager
-from log import Log
+from src.config_manager import ConfigManager
+from src.log import Log
 
 Point = Tuple[int, int]
 BBox = Tuple[int, int, int, int]  # x, y, w, h

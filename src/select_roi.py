@@ -8,8 +8,8 @@ import cv2
 import mss
 import numpy as np
 import pygetwindow as gw
-from config_manager import ConfigManager
-from log import Log
+from src.config_manager import ConfigManager
+from src.log import Log
 
 
 ROI = Tuple[int, int, int, int]
