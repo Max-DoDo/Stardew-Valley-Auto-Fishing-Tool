@@ -9,8 +9,8 @@ import mss
 import numpy as np
 import pygetwindow as gw
 
-from src.config_manager import ConfigManager
-from src.log import Log
+from src.tools.config_manager import ConfigManager
+from src.tools.log import Log
 
 Point = Tuple[int, int]
 BBox = Tuple[int, int, int, int]  # x, y, w, h
@@ -22,26 +22,14 @@ class GreenBarResult:
     greenbar_bbox: Optional[BBox] = None
     greenbar_center: Optional[Point] = None
     confidence:  Optional[float] = None
-    # found_fish: Optional[bool] = None
-    # found_pbox: Optional[bool] = None
-
-
-    # fish_location: Optional[Point] = None
-    # fish_confidence: Optional[float] = None
-
-    # pbox_confidence:  Optional[float] = None
-    # template_name: Optional[str] = None
-
 
 class GreenBarDetector:
 
     def __init__(
         self,
         config_path: str | Path = "config.json",
-        fish_template_dir: str | Path = "assets/fish_templates",
+
     ):
-        self.sct = mss.MSS()
-        
         self.config_path = Path(config_path)
         self.config_manager = ConfigManager(self.config_path)
         self.config = self.config_manager.load()
@@ -56,8 +44,9 @@ class GreenBarDetector:
 
         self.last_bar_center: Point | None = None
 
+        self.lastResult = None
         self.missing_bar_frames = 0
-        self.max_missing_bar_frames = 40  
+        self.max_missing_bar_frames = 20  
 
     def get_green_bar_mask(self, frame: np.ndarray) -> np.ndarray:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -76,7 +65,7 @@ class GreenBarDetector:
         # 竖向闭运算：连接上下断开的白色区域
         vertical_close_kernel = cv2.getStructuringElement(
             cv2.MORPH_RECT,
-            (1, 29)
+            (1, 30)
         )
 
         mask = cv2.morphologyEx(
@@ -98,20 +87,21 @@ class GreenBarDetector:
 
         candidates: list[tuple[float, BBox]] = []
 
+        # Log.debug("=====Frame=====")
         for contour in contours:
             x, y, bw, bh = cv2.boundingRect(contour)
             area = cv2.contourArea(contour)
 
-            min_fill_ratio = 0.70
+            min_fill_ratio = 0.40
             rect_area = bw * bh
             # 寻找竖向矩形
             aspect_ratio = bh / max(bw, 1)
 
-            if aspect_ratio < 1.3:
+            if aspect_ratio < 1.2:
                 continue
 
-            # 1. 面积太小，直接排除
-            if area < 500:
+            # 1. 面积太小
+            if area < 100:
                 continue
 
             # 5. 填充率：bbox 里面真正绿色像素占多少
@@ -124,6 +114,15 @@ class GreenBarDetector:
                 continue
 
             score = area * aspect_ratio
+            if self.last_bar_center is not None:
+                last_cx, last_cy = self.last_bar_center
+                cx = x + bw // 2
+                cy = y + bh // 2
+                y_weight = 0.3
+                distance = np.hypot(cx - last_cx, (cy - last_cy) * y_weight)
+                score -= distance * 200
+                # Log.debug(f"GBDetector: {x, y, bw, bh} score: {score}")
+
             candidates.append((score, (x, y, bw, bh)))
 
         if not candidates:
@@ -132,7 +131,12 @@ class GreenBarDetector:
                 if self.bar_size_locked:
                     self.reset_bar_tracking()
                     self.missing_bar_frames = 0
+            elif self.lastResult is not None:
+                # Log.debug("重建钓鱼条")
+                return self.lastResult
             return GreenBarResult(found=False)
+
+
         
         self.missing_bar_frames = 0
         # 选择最像钓鱼条的轮廓
@@ -155,13 +159,14 @@ class GreenBarDetector:
             final_bbox = raw_bbox
 
         confidence = min(1.0, best_score / 5000)
-
-        return GreenBarResult(
+        self.last_bar_center = center
+        self.lastResult = GreenBarResult(
             found=True,
             greenbar_center=center,
             greenbar_bbox=final_bbox,
             confidence=confidence
         )
+        return self.lastResult
 
     def _update_bbox_size_lock(self, bbox: BBox):
         if self.bar_size_locked:
@@ -217,152 +222,9 @@ class GreenBarDetector:
         self.locked_bar_height = None
         self.bar_size_samples.clear()
         self.last_bar_center = None
+        self.lastResult = None
 
         Log.info("已重置钓鱼条跟踪状态")
-    
-    def preview(self) -> None:
-        """
-        预览 ROI 截图，并显示截图 FPS 和实际 FPS。
-        """
-        import time
-
-        actual_fps = 0.0
-        capture_fps = 0.0
-        last_frame_time = time.perf_counter()
-
-        Log.info(f"开始预览 ROI, 目标 FPS = {self.target_fps}")
-
-        preview_win = "Fishing Bar Detection Preview"
-        mask_win = "Green Bar Mask"
-
-        cv2.namedWindow(preview_win, cv2.WINDOW_NORMAL)
-        cv2.namedWindow(mask_win, cv2.WINDOW_NORMAL)
-
-        cv2.resizeWindow(preview_win, self.roi_width, self.roi_height)
-        cv2.resizeWindow(mask_win, self.roi_width, self.roi_height)
-        # 置顶窗口
-        try:
-            cv2.setWindowProperty(preview_win, cv2.WND_PROP_TOPMOST, 1)
-            cv2.setWindowProperty(mask_win, cv2.WND_PROP_TOPMOST, 1)
-        except Exception as e:
-            Log.warn(f"设置窗口置顶失败: {e}")
-
-        while True:
-            loop_start = time.perf_counter()
-
-            capture_start = time.perf_counter()
-            frame = self.capture_roi()
-            capture_elapsed = time.perf_counter() - capture_start
-
-            if capture_elapsed > 0:
-                capture_fps = 1.0 / capture_elapsed
-
-            # 检测绿色钓鱼条
-            greenbar_result = self.detect(frame)
-
-            # 生成 mask，用于调 HSV
-            mask = self.get_green_bar_mask(frame)
-
-            debug_frame = frame.copy()
-
-            if (
-                greenbar_result.found
-                and greenbar_result.greenbar_bbox is not None
-                and greenbar_result.greenbar_center is not None
-            ):
-                x, y, bw, bh = greenbar_result.greenbar_bbox
-                cx, cy = greenbar_result.greenbar_center
-
-                cv2.rectangle(
-                    debug_frame,
-                    (x, y),
-                    (x + bw, y + bh),
-                    (0, 255, 0),
-                    2,
-                )
-
-                cv2.circle(
-                    debug_frame,
-                    (cx, cy),
-                    4,
-                    (0, 255, 0),
-                    -1,
-                )
-
-                cv2.putText(
-                    debug_frame,
-                    f"BAR FOUND y={cy} conf={greenbar_result.confidence:.2f}",
-                    (10, 85),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
-                    2,
-                    cv2.LINE_AA,
-                )
-            else:
-                cv2.putText(
-                    debug_frame,
-                    "BAR NOT FOUND",
-                    (10, 85),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 0, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-
-            cv2.putText(
-                debug_frame,
-                f"Actual FPS: {actual_fps:.1f}",
-                (10, 25),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
-
-            cv2.putText(
-                debug_frame,
-                f"Capture FPS: {capture_fps:.1f}",
-                (10, 55),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA,
-            )
-
-            cv2.imshow(preview_win, debug_frame)
-            cv2.imshow(mask_win, mask)
-
-            key = cv2.waitKey(1) & 0xFF
-
-            if key in (27, ord("q"), ord("Q")):
-                break
-
-            elapsed = time.perf_counter() - loop_start
-            sleep_time = self.frame_interval - elapsed
-
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-            now = time.perf_counter()
-            frame_time = now - last_frame_time
-            last_frame_time = now
-
-            if frame_time > 0:
-                current_actual_fps = 1.0 / frame_time
-                actual_fps = actual_fps * 0.5 + current_actual_fps * 0.5
-
-        cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    fv = GreenBarDetector()
-    fv.preview()
-
-    # fv.detect_fishing_bar(fv.capture_roi())
 
         
         

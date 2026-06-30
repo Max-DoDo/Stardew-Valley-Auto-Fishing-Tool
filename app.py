@@ -1,14 +1,29 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
-from fish_detector import FishDetector
-from src.greenbar_detector import GreenBarDetector
-from src.config_manager import ConfigManager
-from src.log import Log
-from src.ui_detector import UIDetector
-from src.window_detector import WindowDetector
+from src.detector.fish_detector import FishDetector
+from src.detector.fish_y_detector import FishYDetector
+from src.detector.process_bar_detector import ProcessBarDetector
+from src.detector.greenbar_detector import GreenBarDetector
+from src.tools.config_manager import ConfigManager
+from src.tools.log import Log
+from src.detector.ui_detector import UIDetector
+from src.detector.window_detector import WindowDetector
 import time
+
+@dataclass
+class State:
+    isFishing: bool
+    fish_in_greenbar: bool
+
+    fish_y: int
+    greenbar_center_y: int
+    greenbar_height: int
+
+    fish_velocity_y: int
+    greenbar_velocity_y: int
 
 
 class App:
@@ -35,9 +50,17 @@ class App:
 
         self.wd = WindowDetector()
         self.ud = UIDetector()
-        self.gd = GreenBarDetector()#
+        self.gd = GreenBarDetector()
         self.fd = FishDetector()
+        self.pd = ProcessBarDetector()
 
+        self.fyd = FishYDetector(
+            hsv_low=(15, 50, 100),
+            hsv_high=(45, 220, 255),
+            fish_x1_ratio=0.25,
+            fish_x2_ratio=0.75,
+            min_row_score=3,
+        )
         window = self.wd.find_window()
 
         while True:
@@ -71,26 +94,32 @@ class App:
                 roi = self.roi
                 self._resize_preview_window(preview_win,roi["width"], roi["height"])
 
-            # Log.info(roi)
+            # Log.debug(roi)
             frame = self.wd.capture_roi(roi)
             debug_frame = frame.copy()
 
             if self.findUIROI:
-                fish_result = self.fd.detect(frame,self.wd.get_monitor())
+                fish_result = self.fd.detect(frame)
                 greenbar_result = self.gd.detect(frame)
+                # Log.debug(f"GreenBar Detector: {greenbar_result.found} center: {greenbar_result.greenbar_center} Conf: {greenbar_result.confidence}")
+
                 if greenbar_result.found and fish_result.found:
 
                     x, y, bw, bh = greenbar_result.greenbar_bbox
                     cx, cy = greenbar_result.greenbar_center
 
+
                     cv2.rectangle(debug_frame,(x, y),(x + bw, y + bh),(0, 255, 0),2,)
                     cv2.circle(debug_frame,(cx, cy),4,(0, 255, 0),-1,)
 
-                    x, y, bw, bh = fish_result.fish_bbox
-                    cx, cy = fish_result.fish_center
-                    cv2.rectangle(debug_frame,(x, y),(x + bw, y + bh),(255, 0, 0),2,)
-                    cv2.circle(debug_frame,(cx, cy),4,(255, 0, 0),-1,)                  
-                    Log.debug(f"Fish Detector: {fish_result.fish_bbox} center: {fish_result.fish_center} name: {fish_result.template_name}" )
+                    cx, fishy = fish_result.fish_center
+                    fish_in_greenbar =  y <= fish_result.fish_center[1] < y + bh
+                    if fish_in_greenbar:
+                        cv2.circle(debug_frame,(cx, fishy),6,(255, 0, 0),-1,)
+                    else:
+                        cv2.circle(debug_frame,(cx, fishy),6,(0, 0, 255),-1,)
+
+
 
             # endTime = time.perf_counter()
             # # Log.info(endTime-startTime)

@@ -1,31 +1,40 @@
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
-from src.log import Log
+from dataclasses import dataclass
 
-Monitor = dict[str, int]
+from src.tools.log import Log
+
 BBox = tuple[int, int, int, int]
 Point = tuple[int, int]
+Monitor = dict[str, int]
+
 
 @dataclass
-class FishDetectionResult:
+class UIDetectionResult:
     found: bool
     template_name: Optional[str] = None
     confidence: float = 0.0
     scale: float = 0.0
 
-    fish_bbox: Optional[BBox] = None
-    fish_center: Optional[Point] = None
+    ui_bbox: Optional[BBox] = None
     roi_bbox: Optional[BBox] = None
+    # roi_center: Optional[Point] = None
     roi_monitor: Optional[Monitor] = None
-    
-class FishDetector:
 
-    def __init__(self,template_dir: str | Path = "assets/fish_templates",threshold: float = 0.70,):
+
+
+class UIDetector:
+
+    def __init__(
+        self,
+        template_dir: str | Path = "assets/ui_templates",
+        threshold: float = 0.70,
+        ):
+
         self.scales = (
             0.80,
             0.85,
@@ -36,100 +45,99 @@ class FishDetector:
             1.10,
             1.15,
             1.20,)
-        self.fish_template_dir = Path(template_dir)
+        self.ui_template_dir = Path(template_dir)
         self.threshold = threshold
-        self.fish_templates: list[tuple[str, np.ndarray]] = []
-        self._load_fish_templates()
+        self.ui_templates: list[tuple[str, np.ndarray]] = []
+        self._load_ui_templates()
 
-    def _load_fish_templates(self):
-        self.fish_templates.clear()
+    def _load_ui_templates(self) -> None:
+        self.ui_templates.clear()
 
-        if not self.fish_template_dir.exists():
-            Log.warn(f"找不到 Fish 模板文件夹: {self.fish_template_dir}")
+        if not self.ui_template_dir.exists():
+            Log.warn(f"找不到 UI 模板文件夹: {self.ui_template_dir}")
             raise FileNotFoundError(
             )
-    
+
         image_paths = []
+
         for suffix in ("*.png", "*.jpg", "*.jpeg", "*.bmp"):
-            image_paths.extend(self.fish_template_dir.glob(suffix))
+            image_paths.extend(self.ui_template_dir.glob(suffix))
 
         if not image_paths:
-            Log.error(f"Fish模板文件夹中没有图片: {self.fish_template_dir}")
+            Log.error(f"UI 模板文件夹中没有图片: {self.ui_template_dir}")
             raise FileNotFoundError(
             )
 
         for image_path in image_paths:
             template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
             if template is None:
-                Log.warn(f"无法读取 Fish 模板: {image_path}")
+                Log.warn(f"无法读取 UI 模板: {image_path}")
                 continue
-            self.fish_templates.append((image_path.stem, template))
-            Log.info(f"加载 Fish 模板: {image_path}")
+            self.ui_templates.append((image_path.stem, template))
+            Log.info(f"加载 UI 模板: {image_path}")
 
-        if not self.fish_templates:
+        if not self.ui_templates:
             Log.error("没有成功加载任何鱼图标模板。")
             raise RuntimeError(
             )
-        Log.success(f"已加载 {len(self.fish_templates)} 个 Fish 模板")
+        
+        Log.success(f"已加载 {len(self.ui_templates)} 个 UI 模板")
 
     def detect(self, frame: np.array, monitor: Monitor):
         if frame is None or frame.size == 0:
-            return FishDetectionResult(found=False)
+            return UIDetectionResult(found=False)
         
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         best_confidence = 0.0
         best_template_name: Optional[str] = None
         best_scale = 1.0
-        best_fish_bbox: Optional[BBox] = None
+        best_ui_bbox: Optional[BBox] = None
 
-        for template_name, template in self.fish_templates:
+        for template_name, template in self.ui_templates:
             match_result = self._match_template_multiscale(gray_frame=gray_frame, template=template)
 
             if match_result is None:
                 continue
 
-            fish_bbox, confidence, scale = match_result
+            ui_bbox, confidence, scale = match_result
 
             if confidence > best_confidence:
                 best_template_name = template_name
                 best_confidence = confidence
                 best_scale = scale
-                best_fish_bbox = fish_bbox
+                best_ui_bbox = ui_bbox
 
         if best_confidence < self.threshold:
-            return FishDetectionResult(
+            return UIDetectionResult(
                 found=False,
                 template_name=best_template_name,
                 confidence=best_confidence,
                 scale=best_scale,
-                fish_bbox=best_fish_bbox,
+                ui_bbox=best_ui_bbox,
             )
 
-        return FishDetectionResult(
+
+
+        return UIDetectionResult(
             found=True,
             template_name=best_template_name,
             confidence=best_confidence,
             scale=best_scale,
-            fish_bbox=best_fish_bbox,
-            fish_center = ( 
-                best_fish_bbox[0] + best_fish_bbox[2] // 2,
-                best_fish_bbox[1] + best_fish_bbox[3] // 2
-            ),
-            roi_monitor=self._bbox_to_screen_monitor(fish_bbox, monitor)
+            ui_bbox=best_ui_bbox,
+            roi_monitor=self._bbox_to_screen_monitor(ui_bbox,monitor),
         )
-
+    
     def _bbox_to_screen_monitor(
         self,
         bbox: BBox,
         monitor: Monitor,
     ) -> Monitor:
-            
+        
         screen_origin = (
             monitor["left"],
             monitor["top"],
         )
-
         origin_x, origin_y = screen_origin
 
         x, y, w, h = bbox
@@ -140,7 +148,8 @@ class FishDetector:
             "width": int(w),
             "height": int(h),
         }
-    
+
+
     def _match_template_multiscale(
         self,
         gray_frame: np.ndarray,
@@ -202,3 +211,5 @@ class FishDetector:
             return None
 
         return best_bbox, best_confidence, best_scale
+
+    

@@ -1,0 +1,3 @@
+
+class ProcessBarDetector:
+    pass

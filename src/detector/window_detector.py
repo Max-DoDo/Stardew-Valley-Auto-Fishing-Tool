@@ -5,8 +5,8 @@ import cv2
 import mss
 import numpy as np
 import pygetwindow as gw
-from src.config_manager import ConfigManager
-from src.log import Log
+from src.tools.config_manager import ConfigManager
+from src.tools.log import Log
 import win32gui # type: ignore
 import win32con # type: ignore
 
