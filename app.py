@@ -7,24 +7,15 @@ from src.detector.fish_detector import FishDetector
 from src.detector.fish_y_detector import FishYDetector
 from src.detector.process_bar_detector import ProcessBarDetector
 from src.detector.greenbar_detector import GreenBarDetector
+from src.model.q_model import QModel
+from src.model.rule_model import RuleModel
+from src.model.state import State
 from src.tools.config_manager import ConfigManager
+from src.tools.input_controller import InputController
 from src.tools.log import Log
 from src.detector.ui_detector import UIDetector
 from src.detector.window_detector import WindowDetector
 import time
-
-@dataclass
-class State:
-    isFishing: bool
-    fish_in_greenbar: bool
-
-    fish_y: int
-    greenbar_center_y: int
-    greenbar_height: int
-
-    fish_velocity_y: int
-    greenbar_velocity_y: int
-
 
 class App:
 
@@ -48,11 +39,18 @@ class App:
         self.monitor = None
         self.roi = None
 
+        self.last_fish_y = None
+        self.last_greenbar_center_y = None
+
         self.wd = WindowDetector()
         self.ud = UIDetector()
         self.gd = GreenBarDetector()
         self.fd = FishDetector()
         self.pd = ProcessBarDetector()
+
+        self.model = QModel()
+
+        self.input = InputController()
 
         self.fyd = FishYDetector(
             hsv_low=(15, 50, 100),
@@ -80,7 +78,6 @@ class App:
         cv2.namedWindow(preview_win, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(preview_win, cv2.WND_PROP_TOPMOST, 1)
 
-
         while True:
             # startTime = time.perf_counter()
             self.update_monitor()
@@ -101,8 +98,8 @@ class App:
             if self.findUIROI:
                 fish_result = self.fd.detect(frame)
                 greenbar_result = self.gd.detect(frame)
-                # Log.debug(f"GreenBar Detector: {greenbar_result.found} center: {greenbar_result.greenbar_center} Conf: {greenbar_result.confidence}")
 
+                # is fishing
                 if greenbar_result.found and fish_result.found:
 
                     x, y, bw, bh = greenbar_result.greenbar_bbox
@@ -113,13 +110,20 @@ class App:
                     cv2.circle(debug_frame,(cx, cy),4,(0, 255, 0),-1,)
 
                     cx, fishy = fish_result.fish_center
-                    fish_in_greenbar =  y <= fish_result.fish_center[1] < y + bh
-                    if fish_in_greenbar:
+
+                    s = self.build_state(greenbar_result,fish_result)
+                    self.model.learn(next_state=s, reward=self.compute_reward(s))
+                    p = self.model.predict(s)
+                    self.input.apply_action(p)
+                    Log.info(s,p)
+
+                    if y <= fish_result.fish_center[1] < y + bh:
                         cv2.circle(debug_frame,(cx, fishy),6,(255, 0, 0),-1,)
                     else:
                         cv2.circle(debug_frame,(cx, fishy),6,(0, 0, 255),-1,)
-
-
+                else:
+                    self.input.reset()
+                    self.model.reset_episode()
 
             # endTime = time.perf_counter()
             # # Log.info(endTime-startTime)
@@ -139,6 +143,7 @@ class App:
     def update_ui(self):
         Log.info("detecting UI")
         self.is_update = False
+        self.findUIROI = False
         result = self.ud.detect(self.wd.capture(),self.wd.get_monitor())
         if result.found:
             Log.success(f"UI Detected with confidence: {result.confidence}")
@@ -169,8 +174,67 @@ class App:
 
         self.last_preview_size = new_size
 
+    def build_state(self,greenbar_result,fish_result ):
+        if (
+            not self.findUIROI
+            or not fish_result.found
+            or fish_result.fish_center is None
+            or not greenbar_result.found
+            or greenbar_result.greenbar_bbox is None
+            or greenbar_result.greenbar_center is None
+        ):
+            self.last_fish_y = None
+            self.last_greenbar_center_y = None
 
+            return State(
+                isFishing=False,
+                fish_in_greenbar=False,
+            )
+        
+        _, fish_y = fish_result.fish_center
+        _, y, _, bh = greenbar_result.greenbar_bbox
+        _, greenbar_center_y = greenbar_result.greenbar_center
+        fish_in_greenbar = y <= fish_y < y + bh
 
+        distance_y = fish_y - greenbar_center_y
+
+        # build fish vel
+        if self.last_fish_y is None:
+            fish_velocity_y = 0
+        else:
+            fish_velocity_y = fish_y - self.last_fish_y
+                
+        # build greenbar vel
+        if self.last_greenbar_center_y is None:
+            greenbar_velocity_y = 0
+        else:
+            greenbar_velocity_y = greenbar_center_y - self.last_greenbar_center_y
+
+        self.last_fish_y = fish_y
+        self.last_greenbar_center_y = greenbar_center_y
+
+        return State(
+            isFishing=True,
+            fish_in_greenbar=fish_in_greenbar,
+            fish_y=fish_y,
+            greenbar_center_y=greenbar_center_y,
+            greenbar_height=bh,
+            distance = distance_y,
+            fish_velocity_y=fish_velocity_y,
+            greenbar_velocity_y=greenbar_velocity_y,
+        )
+
+    def compute_reward(self, state: State) -> float:
+        if not state.isFishing:
+            return -2.0
+        reward = 0.0
+
+        if state.fish_in_greenbar:
+            reward += 1.0
+        else:
+            reward -= 2.0
+
+        return reward
 if __name__ == "__main__":
     App().run()
 
